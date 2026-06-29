@@ -113,11 +113,34 @@ async def analyze(request: AnalyzeRequest):
 
 @app.post("/ask")
 async def ask(request: AskRequest):
+    # If not in memory, try to recover from disk before giving up
     if request.repo_name not in session_cache:
-        raise HTTPException(
-            status_code=400,
-            detail="This repo hasn't been analyzed yet. Call /analyze first."
-        )
+        cached_graph = load_graph(request.repo_name)
+
+        if cached_graph is None:
+            raise HTTPException(
+                status_code=400,
+                detail="This repo hasn't been analyzed yet. Call /analyze first."
+            )
+
+        # Re-parse the cloned repo to get source code context back
+        from repo_parser import find_python_files, parse_python_file
+
+        repo_path = os.path.join("cloned_repos", request.repo_name)
+        if not os.path.exists(repo_path):
+            raise HTTPException(
+                status_code=400,
+                detail="Graph found but the cloned repo is missing. Please re-analyze."
+            )
+
+        python_files = find_python_files(repo_path)
+        parsed_files = [parse_python_file(f) for f in python_files]
+        parsed_files = [f for f in parsed_files if f]
+
+        session_cache[request.repo_name] = {
+            "graph": cached_graph,
+            "parsed_files": parsed_files
+        }
 
     try:
         cached = session_cache[request.repo_name]

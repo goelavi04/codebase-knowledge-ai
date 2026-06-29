@@ -33,14 +33,31 @@ def get_node_source_snippet(graph, node_id: str, parsed_files: list, max_lines: 
     return ""
 
 
+def is_summary_question(question: str) -> bool:
+    """
+    Detects broad 'tell me about this repo' style questions
+    that need wide context instead of narrow targeted search.
+    """
+    summary_keywords = [
+        "what is this repo", "what does this repo", "what is this project",
+        "summary", "summarize", "overview", "what is the repo about",
+        "what does this do", "explain this repo", "explain this project",
+        "what's this about"
+    ]
+    question_lower = question.lower()
+    return any(keyword in question_lower for keyword in summary_keywords)
+
+
 def hybrid_retrieve(question: str, repo_name: str, graph, parsed_files: list) -> dict:
     """
     Step 1: Vector search for semantically relevant functions/classes
+             (wider net for summary-style questions)
     Step 2: Graph traversal to pull in connected nodes for each result
     Step 3: Build combined context for the LLM
     """
-    # Step 1 - vector search
-    vector_matches = search_repo(question, repo_name, top_k=5)
+    # Step 1 - vector search - widen the net for summary-style questions
+    top_k = 20 if is_summary_question(question) else 5
+    vector_matches = search_repo(question, repo_name, top_k=top_k)
 
     all_relevant_nodes = set()
     primary_nodes = []
@@ -84,14 +101,23 @@ def hybrid_retrieve(question: str, repo_name: str, graph, parsed_files: list) ->
 def generate_answer(question: str, context_text: str) -> str:
     """
     Sends the question + combined GraphRAG context to OpenRouter
-    and returns a plain-English answer.
+    and returns a plain-English, well-formatted answer.
     """
     system_prompt = (
         "You are a senior software engineer explaining a codebase to a teammate. "
         "Use the provided context about functions, classes, and their relationships "
-        "to answer the question clearly and specifically. "
-        "Reference exact file paths and function names from the context. "
-        "If the context doesn't contain enough information, say so honestly."
+        "to answer the question clearly and specifically.\n\n"
+        "Formatting rules:\n"
+        "- Use short bullet points for lists of files, functions, or features\n"
+        "- Use a brief intro sentence before bullets, not just a bullet dump\n"
+        "- Bold key file names and function names using **name** style\n"
+        "- Keep bullets concise - one idea per bullet\n"
+        "- If asked for a general summary or overview of the repo, synthesize "
+        "across ALL the files and functions in the context into a coherent "
+        "paragraph first, THEN list key components as bullets - don't just "
+        "list isolated functions without explaining the bigger picture\n"
+        "- If the context doesn't contain enough information, say so honestly "
+        "rather than guessing"
     )
 
     user_prompt = f"Question: {question}\n\nCodebase context:\n{context_text}"
